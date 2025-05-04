@@ -245,8 +245,8 @@ func (embyServerHandler *EmbyServerHandler) VideosHandler(ctx *gin.Context) {
 						},
 					}
 
-					// 2. 创建 GET 请求，并设置 UA（从原始请求中获取）
-					req, err := http.NewRequest("GET", *mediasource.Path, nil)
+					// 2. 创建 HEAD 请求，并设置 UA（从原始请求中获取）
+					req, err := http.NewRequest("HEAD", *mediasource.Path, nil)
 					if err != nil {
 						logging.Warning("HTTPStrm 创建请求失败：", err)
 						return
