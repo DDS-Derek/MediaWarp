@@ -238,8 +238,17 @@ func (embyServerHandler *EmbyServerHandler) VideosHandler(ctx *gin.Context) {
 			switch strmFileType {
 			case constants.HTTPStrm:
 				if *mediasource.Protocol == emby.HTTP {
-					logging.Info("HTTPStrm 重定向至：", *mediasource.Path)
-					ctx.Redirect(http.StatusFound, *mediasource.Path)
+					// 先发起HEAD请求获取真实地址（会自动跟随302跳转）
+					resp, err := http.Head(*mediasource.Path)
+					if err != nil {
+						logging.Warning("获取HTTPStrm最终地址失败：", err)
+						return
+					}
+					defer resp.Body.Close()
+
+					finalURL := resp.Request.URL.String()
+					logging.Info("HTTPStrm 重定向至：", finalURL)
+					ctx.Redirect(http.StatusFound, finalURL)
 				}
 				return
 			case constants.AlistStrm: // 无需判断 *mediasource.Container 是否以Strm结尾，当 AlistStrm 存储的位置有对应的文件时，*mediasource.Container 会被设置为文件后缀
