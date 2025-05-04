@@ -217,15 +217,29 @@ func (jellyfinHandler *JellyfinHandler) VideosHandler(ctx *gin.Context) {
 						},
 					}
 
-					// 2. 发起 GET 请求
-					resp, err := noRedirectClient.Get(*mediasource.Path)
+					// 2. 创建 GET 请求，并设置 UA（从原始请求中获取）
+					req, err := http.NewRequest("GET", *mediasource.Path, nil)
+					if err != nil {
+						logging.Warning("HTTPStrm 创建请求失败：", err)
+						return
+					}
+
+					// 3. 设置 User-Agent（使用客户端的 UA）
+					if ua := ctx.Request.UserAgent(); ua != "" {
+						req.Header.Set("User-Agent", ua)
+					} else {
+						req.Header.Set("User-Agent", "")
+					}
+
+					// 4. 发起请求
+					resp, err := noRedirectClient.Do(req)
 					if err != nil {
 						logging.Warning("HTTPStrm 请求失败：", err)
 						return
 					}
 					defer resp.Body.Close()
 
-					// 3. 检查是否是 302 跳转
+					// 5. 检查是否是 302 跳转
 					if resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusMovedPermanently {
 						finalURL := resp.Header.Get("Location")
 						if finalURL == "" {
@@ -235,7 +249,7 @@ func (jellyfinHandler *JellyfinHandler) VideosHandler(ctx *gin.Context) {
 						logging.Info("HTTPStrm 302 跳转至：", finalURL)
 						ctx.Redirect(http.StatusFound, finalURL)
 					} else {
-						// 4. 如果不是 302，直接返回原始 URL
+						// 6. 如果不是 302，直接返回原始 URL
 						logging.Info("HTTPStrm 直接访问（非 302）：", *mediasource.Path)
 						ctx.Redirect(http.StatusFound, *mediasource.Path)
 					}
