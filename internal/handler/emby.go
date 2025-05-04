@@ -238,33 +238,33 @@ func (embyServerHandler *EmbyServerHandler) VideosHandler(ctx *gin.Context) {
 			switch strmFileType {
 			case constants.HTTPStrm:
 				if *mediasource.Protocol == emby.HTTP {
-					// 创建自定义Client，禁止自动重定向
-					client := &http.Client{
+					// 1. 创建不自动跳转的 HTTP Client
+					noRedirectClient := &http.Client{
 						CheckRedirect: func(req *http.Request, via []*http.Request) error {
-							return http.ErrUseLastResponse // 强制停止在第一个重定向
+							return http.ErrUseLastResponse // 强制返回 302，不自动跳转
 						},
 					}
 
-					// 发起请求
-					resp, err := client.Head(*mediasource.Path)
+					// 2. 发起 GET 请求
+					resp, err := noRedirectClient.Get(*mediasource.Path)
 					if err != nil {
-						logging.Warning("获取HTTPStrm最终地址失败：", err)
+						logging.Warning("HTTPStrm 请求失败：", err)
 						return
 					}
 					defer resp.Body.Close()
 
-					// 检查是否是重定向响应
-					if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+					// 3. 检查是否是 302 跳转
+					if resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusMovedPermanently {
 						finalURL := resp.Header.Get("Location")
 						if finalURL == "" {
-							logging.Warning("HTTPStrm返回了重定向状态码但没有Location头")
+							logging.Warning("HTTPStrm 返回 302，但没有 Location 头")
 							return
 						}
-						logging.Info("HTTPStrm 重定向至：", finalURL)
+						logging.Info("HTTPStrm 302 跳转至：", finalURL)
 						ctx.Redirect(http.StatusFound, finalURL)
 					} else {
-						// 如果不是重定向响应，直接使用原始URL
-						logging.Info("HTTPStrm 直接访问：", *mediasource.Path)
+						// 4. 如果不是 302，直接返回原始 URL
+						logging.Info("HTTPStrm 直接访问（非 302）：", *mediasource.Path)
 						ctx.Redirect(http.StatusFound, *mediasource.Path)
 					}
 				}
