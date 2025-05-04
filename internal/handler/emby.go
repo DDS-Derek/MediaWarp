@@ -238,17 +238,35 @@ func (embyServerHandler *EmbyServerHandler) VideosHandler(ctx *gin.Context) {
 			switch strmFileType {
 			case constants.HTTPStrm:
 				if *mediasource.Protocol == emby.HTTP {
-					// 先发起HEAD请求获取真实地址（会自动跟随302跳转）
-					resp, err := http.Head(*mediasource.Path)
+					// 创建自定义Client，禁止自动重定向
+					client := &http.Client{
+						CheckRedirect: func(req *http.Request, via []*http.Request) error {
+							return http.ErrUseLastResponse // 强制停止在第一个重定向
+						},
+					}
+
+					// 发起请求
+					resp, err := client.Head(*mediasource.Path)
 					if err != nil {
 						logging.Warning("获取HTTPStrm最终地址失败：", err)
 						return
 					}
 					defer resp.Body.Close()
 
-					finalURL := resp.Request.URL.String()
-					logging.Info("HTTPStrm 重定向至：", finalURL)
-					ctx.Redirect(http.StatusFound, finalURL)
+					// 检查是否是重定向响应
+					if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+						finalURL := resp.Header.Get("Location")
+						if finalURL == "" {
+							logging.Warning("HTTPStrm返回了重定向状态码但没有Location头")
+							return
+						}
+						logging.Info("HTTPStrm 重定向至：", finalURL)
+						ctx.Redirect(http.StatusFound, finalURL)
+					} else {
+						// 如果不是重定向响应，直接使用原始URL
+						logging.Info("HTTPStrm 直接访问：", *mediasource.Path)
+						ctx.Redirect(http.StatusFound, *mediasource.Path)
+					}
 				}
 				return
 			case constants.AlistStrm: // 无需判断 *mediasource.Container 是否以Strm结尾，当 AlistStrm 存储的位置有对应的文件时，*mediasource.Container 会被设置为文件后缀
