@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -212,12 +213,30 @@ func (jellyfinHandler *JellyfinHandler) VideosHandler(ctx *gin.Context) {
 				if *mediasource.Protocol == jellyfin.HTTP {
 					// 创建不自动跳转的HTTP Client
 					noRedirectClient := &http.Client{
+						Timeout: 10 * time.Second, // 增加超时设置
 						CheckRedirect: func(req *http.Request, via []*http.Request) error {
 							return http.ErrUseLastResponse
 						},
 					}
 
-					firstReq, err := http.NewRequest("HEAD", *mediasource.Path, nil)
+					// 对原始URL进行解析和编码
+					baseURL, err := url.Parse(*mediasource.Path)
+					if err != nil {
+						logging.Warning("HTTPStrm[0] 解析原始URL失败:", err)
+						return
+					}
+
+					// 对查询参数进行编码
+					query := baseURL.Query()
+					encodedQuery := url.Values{}
+					for key, values := range query {
+						for _, value := range values {
+							encodedQuery.Add(key, value)
+						}
+					}
+					baseURL.RawQuery = encodedQuery.Encode()
+
+					firstReq, err := http.NewRequest("HEAD", baseURL.String(), nil)
 					if err != nil {
 						logging.Warning("HTTPStrm[1] 请求创建失败:", err)
 						return
@@ -246,24 +265,32 @@ func (jellyfinHandler *JellyfinHandler) VideosHandler(ctx *gin.Context) {
 						var finalURL string
 
 						if strings.HasPrefix(location, "/302/?pickcode=") {
-							baseURL, err := url.Parse(*mediasource.Path)
-							if err != nil {
-								logging.Warning("HTTPStrm[2] 解析原始URL失败:", err)
-								return
-							}
 							fullURL := fmt.Sprintf("%s://%s%s", baseURL.Scheme, baseURL.Host, location)
 							logging.Info("HTTPStrm[2] 拼接完整URL:", fullURL)
 
-							secondReq, err := http.NewRequest("HEAD", fullURL, nil)
+							// 对跳转URL也进行编码处理
+							redirectURL, err := url.Parse(fullURL)
+							if err != nil {
+								logging.Warning("HTTPStrm[2] 解析跳转URL失败:", err)
+								return
+							}
+
+							// 编码跳转URL的查询参数
+							redirectQuery := redirectURL.Query()
+							encodedRedirectQuery := url.Values{}
+							for key, values := range redirectQuery {
+								for _, value := range values {
+									encodedRedirectQuery.Add(key, value)
+								}
+							}
+							redirectURL.RawQuery = encodedRedirectQuery.Encode()
+
+							secondReq, err := http.NewRequest("HEAD", redirectURL.String(), nil)
 							if err != nil {
 								logging.Warning("HTTPStrm[2] 请求创建失败:", err)
 								return
 							}
-							if ua := ctx.Request.UserAgent(); ua != "" {
-								secondReq.Header.Set("User-Agent", ua)
-							} else {
-								secondReq.Header.Set("User-Agent", "")
-							}
+							secondReq.Header = firstReq.Header.Clone()
 
 							secondResp, err := noRedirectClient.Do(secondReq)
 							if err != nil {
@@ -280,11 +307,9 @@ func (jellyfinHandler *JellyfinHandler) VideosHandler(ctx *gin.Context) {
 								}
 								finalURL = finalLocation
 							} else {
-								// 如果不是302，使用拼接后的URL作为最终地址
-								finalURL = fullURL
+								finalURL = redirectURL.String()
 							}
 						} else {
-							// 如果不是特殊格式，直接使用第一次的Location
 							finalURL = location
 						}
 
@@ -293,8 +318,8 @@ func (jellyfinHandler *JellyfinHandler) VideosHandler(ctx *gin.Context) {
 						return
 					}
 
-					// 如果不是302，直接返回原始URL
-					ctx.Redirect(http.StatusFound, *mediasource.Path)
+					// 如果不是302，直接返回编码后的原始URL
+					ctx.Redirect(http.StatusFound, baseURL.String())
 				}
 				return
 			case constants.AlistStrm: // 无需判断 *mediasource.Container 是否以Strm结尾，当 AlistStrm 存储的位置有对应的文件时，*mediasource.Container 会被设置为文件后缀
