@@ -210,49 +210,91 @@ func (jellyfinHandler *JellyfinHandler) VideosHandler(ctx *gin.Context) {
 			switch strmFileType {
 			case constants.HTTPStrm:
 				if *mediasource.Protocol == jellyfin.HTTP {
-					// 1. 创建不自动跳转的 HTTP Client
+					// 创建不自动跳转的HTTP Client
 					noRedirectClient := &http.Client{
 						CheckRedirect: func(req *http.Request, via []*http.Request) error {
-							return http.ErrUseLastResponse // 强制返回 302，不自动跳转
+							return http.ErrUseLastResponse
 						},
 					}
 
-					// 2. 创建 HEAD 请求，并设置 UA（从原始请求中获取）
-					req, err := http.NewRequest("HEAD", *mediasource.Path, nil)
+					firstReq, err := http.NewRequest("HEAD", *mediasource.Path, nil)
 					if err != nil {
-						logging.Warning("HTTPStrm 创建请求失败：", err)
+						logging.Warning("HTTPStrm[1] 请求创建失败:", err)
 						return
 					}
-
-					// 3. 设置 User-Agent（使用客户端的 UA）
 					if ua := ctx.Request.UserAgent(); ua != "" {
-						req.Header.Set("User-Agent", ua)
+						firstReq.Header.Set("User-Agent", ua)
 					} else {
-						req.Header.Set("User-Agent", "")
+						firstReq.Header.Set("User-Agent", "")
 					}
 
-					// 4. 发起请求
-					resp, err := noRedirectClient.Do(req)
+					firstResp, err := noRedirectClient.Do(firstReq)
 					if err != nil {
-						logging.Warning("HTTPStrm 请求失败：", err)
+						logging.Warning("HTTPStrm[1] 请求失败:", err)
 						return
 					}
-					defer resp.Body.Close()
+					defer firstResp.Body.Close()
 
-					// 5. 检查是否是 302 跳转
-					if resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusMovedPermanently {
-						finalURL := resp.Header.Get("Location")
-						if finalURL == "" {
-							logging.Warning("HTTPStrm 返回 302，但没有 Location 头")
+					// 检查是否是302且Location是/302/?pickcode=格式
+					if firstResp.StatusCode == http.StatusFound || firstResp.StatusCode == http.StatusMovedPermanently {
+						location := firstResp.Header.Get("Location")
+						if location == "" {
+							logging.Warning("HTTPStrm[1] 请求返回302但没有Location头")
 							return
 						}
-						logging.Info("HTTPStrm 302 跳转至：", finalURL)
+
+						var finalURL string
+
+						if strings.HasPrefix(location, "/302/?pickcode=") {
+							baseURL, err := url.Parse(*mediasource.Path)
+							if err != nil {
+								logging.Warning("HTTPStrm[2] 解析原始URL失败:", err)
+								return
+							}
+							fullURL := fmt.Sprintf("%s://%s%s", baseURL.Scheme, baseURL.Host, location)
+							logging.Info("HTTPStrm[2] 拼接完整URL:", fullURL)
+
+							secondReq, err := http.NewRequest("HEAD", fullURL, nil)
+							if err != nil {
+								logging.Warning("HTTPStrm[2] 请求创建失败:", err)
+								return
+							}
+							if ua := ctx.Request.UserAgent(); ua != "" {
+								secondReq.Header.Set("User-Agent", ua)
+							} else {
+								secondReq.Header.Set("User-Agent", "")
+							}
+
+							secondResp, err := noRedirectClient.Do(secondReq)
+							if err != nil {
+								logging.Warning("HTTPStrm[2] 请求失败:", err)
+								return
+							}
+							defer secondResp.Body.Close()
+
+							if secondResp.StatusCode == http.StatusFound || secondResp.StatusCode == http.StatusMovedPermanently {
+								finalLocation := secondResp.Header.Get("Location")
+								if finalLocation == "" {
+									logging.Warning("HTTPStrm[2] 请求返回302但没有Location头")
+									return
+								}
+								finalURL = finalLocation
+							} else {
+								// 如果不是302，使用拼接后的URL作为最终地址
+								finalURL = fullURL
+							}
+						} else {
+							// 如果不是特殊格式，直接使用第一次的Location
+							finalURL = location
+						}
+
+						logging.Info("HTTPStrm 获取到最终跳转地址:", finalURL)
 						ctx.Redirect(http.StatusFound, finalURL)
-					} else {
-						// 6. 如果不是 302，直接返回原始 URL
-						logging.Info("HTTPStrm 直接访问（非 302）：", *mediasource.Path)
-						ctx.Redirect(http.StatusFound, *mediasource.Path)
+						return
 					}
+
+					// 如果不是302，直接返回原始URL
+					ctx.Redirect(http.StatusFound, *mediasource.Path)
 				}
 				return
 			case constants.AlistStrm: // 无需判断 *mediasource.Container 是否以Strm结尾，当 AlistStrm 存储的位置有对应的文件时，*mediasource.Container 会被设置为文件后缀
